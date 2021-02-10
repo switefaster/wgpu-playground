@@ -1,0 +1,30 @@
+[package]
+name = "wgpu-playground"
+version = "0.1.0"
+authors = ["switefaster <switefaster@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.38"
+bytemuck = { version = "1.5.0", features = ["derive"] }
+cgmath = "0.18.0"
+env_logger = "0.8.2"
+futures = "0.3.12"
+game-loop = { version = "0.7.3", features = ["window"] }
+image = "0.23.12"
+log = "0.4.14"
+rayon = "1.5.0"
+tobj = "2.0.3"
+wgpu = "0.7.0"
+winit = "0.24.0"
+
+[build-dependencies]
+anyhow = "1.0.38"
+fs_extra = "1.2.0"
+glob = "0.3.0"
+shaderc = "0.7.1"
+
+[profile.release]
+lto = true
