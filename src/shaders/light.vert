@@ -12,6 +12,8 @@ uniform Uniforms {
 
 layout(set = 1, binding = 0)
 uniform Light {
+    mat4 u_view_proj_tex;
+    mat4 u_light_view_proj;
     vec3 u_position;
     vec3 u_color;
 };

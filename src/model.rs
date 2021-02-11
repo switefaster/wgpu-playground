@@ -97,11 +97,7 @@ pub mod obj {
                     },
                     wgpu::BindGroupEntry {
                         binding: 4,
-                        resource: wgpu::BindingResource::Buffer {
-                            buffer: &material_buffer,
-                            offset: 0,
-                            size: None,
-                        },
+                        resource: material_buffer.as_entire_binding(),
                     },
                 ],
                 label: Some(name),
@@ -552,6 +548,63 @@ pub mod obj {
         ) {
             for mesh in &model.meshes {
                 self.draw_light_mesh_instanced(mesh, uniforms, light, instances.clone());
+            }
+        }
+    }
+
+    pub trait DrawObjShadow<'a, 'b>
+    where
+        'b: 'a,
+    {
+        fn draw_mesh_shadow(&mut self, mesh: &'b Mesh, light: &'b wgpu::BindGroup);
+        fn draw_mesh_shadow_instanced(
+            &mut self,
+            mesh: &'b Mesh,
+            light: &'b wgpu::BindGroup,
+            instances: Range<u32>,
+        );
+
+        fn draw_model_shadow(&mut self, model: &'b ObjModel, light: &'b wgpu::BindGroup);
+        fn draw_model_shadow_instanced(
+            &mut self,
+            model: &'b ObjModel,
+            light: &'b wgpu::BindGroup,
+            instances: Range<u32>,
+        );
+    }
+
+    impl<'a, 'b> DrawObjShadow<'a, 'b> for wgpu::RenderPass<'a>
+    where
+        'b: 'a,
+    {
+        fn draw_mesh_shadow(&mut self, mesh: &'b Mesh, light: &'b wgpu::BindGroup) {
+            self.draw_mesh_shadow_instanced(mesh, light, 0..1);
+        }
+
+        fn draw_mesh_shadow_instanced(
+            &mut self,
+            mesh: &'b Mesh,
+            light: &'b wgpu::BindGroup,
+            instances: Range<u32>,
+        ) {
+            self.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+            self.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            self.set_bind_group(0, light, &[]);
+            self.draw_indexed(0..mesh.num_elements, 0, instances);
+        }
+
+        fn draw_model_shadow(&mut self, model: &'b ObjModel, light: &'b wgpu::BindGroup) {
+            self.draw_model_shadow_instanced(model, light, 0..1);
+        }
+
+        fn draw_model_shadow_instanced(
+            &mut self,
+            model: &'b ObjModel,
+            light: &'b wgpu::BindGroup,
+            instances: Range<u32>,
+        ) {
+            for mesh in &model.meshes {
+                self.draw_mesh_shadow_instanced(mesh, light, instances.clone());
             }
         }
     }

@@ -1,13 +1,15 @@
 // #![windows_subsystem = "windows"]
 
-use std::iter;
+use std::{iter, ops::Range};
 
-use cgmath::{InnerSpace, Rotation3, SquareMatrix, Zero};
+use cgmath::{Rotation3, SquareMatrix};
 use futures::executor::block_on;
+use log::info;
 use model::{
-    obj::{DrawObjLight, DrawObjModel, ModelLoader, ObjModel, ObjModelVertex},
+    obj::{DrawObjLight, DrawObjModel, DrawObjShadow, ModelLoader, ObjModel, ObjModelVertex},
     Vertex,
 };
+use text_render::{DrawText, FontRenderer};
 use wgpu::util::DeviceExt;
 use winit::{
     event::{DeviceEvent, ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
@@ -18,7 +20,16 @@ use winit::{
 mod camera;
 mod model;
 mod pipeline;
+mod text_render;
 mod texture;
+
+#[rustfmt::skip]
+const NDC_TO_TEXCOORD: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
+    0.5, 0.0, 0.0, 0.0,
+    0.0, -0.5, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    0.5, 0.5, 0.0, 1.0,
+);
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -41,53 +52,109 @@ impl Uniforms {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct Light {
+    depth: Range<f32>,
+    fov: cgmath::Rad<f32>,
     position: [f32; 3],
-    _padding: u32,
     color: [f32; 3],
+    buffer: wgpu::Buffer,
+    light_bind_group: wgpu::BindGroup,
+    shadow_bind_group: wgpu::BindGroup,
+    shadow_map: texture::Texture,
 }
 
-struct Instance {
-    position: cgmath::Vector3<f32>,
-    rotation: cgmath::Quaternion<f32>,
-}
+impl Light {
+    fn new<F: Into<cgmath::Rad<f32>>>(
+        device: &wgpu::Device,
+        light_layout: &wgpu::BindGroupLayout,
+        shadow_layout: &wgpu::BindGroupLayout,
+        depth: Range<f32>,
+        fov: F,
+        position: [f32; 3],
+        color: [f32; 3],
+    ) -> Self {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Light Buffer"),
+            usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+            size: std::mem::size_of::<RawLight>() as wgpu::BufferAddress,
+            mapped_at_creation: false,
+        });
 
-impl Instance {
-    fn to_raw(&self) -> InstanceRaw {
-        InstanceRaw {
-            model: (cgmath::Matrix4::from_translation(self.position)
-                * cgmath::Matrix4::from(self.rotation))
-            .into(),
+        let shadow_map =
+            texture::Texture::create_depth_texture(device, 1024, 1024, "Shadow Depth Texture");
+
+        let light_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: light_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
+            label: Some("light_bind_group"),
+        });
+        let shadow_bind_group = {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                layout: shadow_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&shadow_map.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&shadow_map.sampler),
+                    },
+                ],
+                label: Some("shadow_bind_group"),
+            })
+        };
+        Self {
+            depth,
+            fov: fov.into(),
+            position,
+            color,
+            buffer,
+            light_bind_group,
+            shadow_bind_group,
+            shadow_map,
+        }
+    }
+
+    fn set_position(&mut self, point: [f32; 3]) {
+        self.position = point;
+    }
+
+    fn update_buffer(&self, queue: &wgpu::Queue) {
+        queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&[self.into_raw()]))
+    }
+
+    fn into_raw(&self) -> RawLight {
+        let proj = cgmath::perspective(self.fov, 1.0, self.depth.start, self.depth.end);
+        let view = cgmath::Matrix4::look_at_rh(
+            self.position.into(),
+            cgmath::point3(0.0, 0.0, 0.0),
+            cgmath::Vector3::unit_y(),
+        );
+        RawLight {
+            view_proj_tex: (NDC_TO_TEXCOORD * proj * view).into(),
+            view_proj: (proj * view).into(),
+            position: self.position.into(),
+            color: self.color,
+            _padding: 0,
         }
     }
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct InstanceRaw {
-    model: [[f32; 4]; 4],
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct RawLight {
+    view_proj_tex: [[f32; 4]; 4],
+    view_proj: [[f32; 4]; 4],
+    position: [f32; 3],
+    _padding: u32,
+    color: [f32; 3],
 }
 
-const INSTANCE_VERTEX_LAYOUT: wgpu::VertexBufferLayout = wgpu::VertexBufferLayout {
-    array_stride: std::mem::size_of::<InstanceRaw>() as wgpu::BufferAddress,
-    step_mode: wgpu::InputStepMode::Instance,
-    attributes: &wgpu::vertex_attr_array![
-        5=>Float4,
-        6=>Float4,
-        7=>Float4,
-        8=>Float4
-    ],
-};
-
-impl Vertex for InstanceRaw {
-    fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
-        INSTANCE_VERTEX_LAYOUT
-    }
-}
-
-struct State {
+struct State<'a> {
     surface: wgpu::Surface,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -104,18 +171,17 @@ struct State {
     camera_controller: camera::CameraController,
     mouse_pressed: bool,
     obj_model: ObjModel,
+    cube_model: ObjModel,
     light_pipeline: wgpu::RenderPipeline,
     light: Light,
-    light_buffer: wgpu::Buffer,
-    light_bind_group: wgpu::BindGroup,
-    instances: Vec<Instance>,
-    instance_buffer: wgpu::Buffer,
+    font_renderer: FontRenderer<'a>,
+    shadow_pipeline: wgpu::RenderPipeline,
 }
 
-const NUM_INSTANCES_PER_ROW: u32 = 10;
+const FONT_DATA: &[u8] = include_bytes!("font/arial.ttf");
 
-impl State {
-    async fn new(window: &Window) -> Self {
+impl<'a> State<'a> {
+    async fn new(window: &Window) -> State<'a> {
         let size = window.inner_size();
 
         let instance = wgpu::Instance::new(wgpu::BackendBit::PRIMARY);
@@ -145,12 +211,16 @@ impl State {
             format: adapter.get_swap_chain_preferred_format(&surface),
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::Mailbox,
+            present_mode: wgpu::PresentMode::Immediate,
         };
         let swap_chain = device.create_swap_chain(&surface, &swapchain_desc);
 
-        let depth_texture =
-            texture::Texture::create_depth_texture(&device, &swapchain_desc, "depth_texture");
+        let depth_texture = texture::Texture::create_depth_texture(
+            &device,
+            swapchain_desc.width,
+            swapchain_desc.height,
+            "depth_texture",
+        );
 
         let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Object Texture Bind Group Layout"),
@@ -236,6 +306,32 @@ impl State {
                 label: None,
             });
 
+        let shadow_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStage::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStage::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler {
+                            filtering: true,
+                            comparison: true,
+                        },
+                        count: None,
+                    },
+                ],
+                label: None,
+            });
+
         let pipeline = {
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Object Render Pipeline Layout"),
@@ -243,17 +339,20 @@ impl State {
                     &texture_layout,
                     &uniform_bind_group_layout,
                     &light_bind_group_layout,
+                    &shadow_bind_group_layout,
                 ],
                 push_constant_ranges: &[],
             });
             pipeline::create_render_pipeline(
                 &device,
                 &layout,
-                swapchain_desc.format,
                 Some(texture::Texture::DEPTH_FORMAT),
-                &[ObjModelVertex::desc(), InstanceRaw::desc()],
+                &[ObjModelVertex::desc()],
                 wgpu::include_spirv!("shaders/shader.vert.spv"),
-                wgpu::include_spirv!("shaders/shader.frag.spv"),
+                Some((
+                    swapchain_desc.format,
+                    wgpu::include_spirv!("shaders/shader.frag.spv"),
+                )),
                 Some("Object Render Pipeline"),
             )
         };
@@ -267,12 +366,31 @@ impl State {
             pipeline::create_render_pipeline(
                 &device,
                 &layout,
-                swapchain_desc.format,
                 Some(texture::Texture::DEPTH_FORMAT),
                 &[ObjModelVertex::desc()],
                 wgpu::include_spirv!("shaders/light.vert.spv"),
-                wgpu::include_spirv!("shaders/light.frag.spv"),
+                Some((
+                    swapchain_desc.format,
+                    wgpu::include_spirv!("shaders/light.frag.spv"),
+                )),
                 Some("Light Render Pipeline"),
+            )
+        };
+
+        let shadow_pipeline = {
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Shadow Mapping Pipeline Layout"),
+                bind_group_layouts: &[&light_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+            pipeline::create_render_pipeline(
+                &device,
+                &layout,
+                Some(texture::Texture::DEPTH_FORMAT),
+                &[ObjModelVertex::desc()],
+                wgpu::include_spirv!("shaders/shadow.vert.spv"),
+                None,
+                Some("Shadow Mapping Pipeline"),
             )
         };
 
@@ -299,71 +417,9 @@ impl State {
             layout: &uniform_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::Buffer {
-                    buffer: &uniform_buffer,
-                    offset: 0,
-                    size: None,
-                },
+                resource: uniform_buffer.as_entire_binding(),
             }],
             label: Some("uniform_bind_group"),
-        });
-
-        let light = Light {
-            position: [2.0, 2.0, 2.0],
-            _padding: 0,
-            color: [1.0, 1.0, 1.0],
-        };
-
-        let light_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Light Buffer"),
-            contents: bytemuck::cast_slice(&[uniforms]),
-            usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
-        });
-
-        let light_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &light_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer {
-                    buffer: &light_buffer,
-                    offset: 0,
-                    size: None,
-                },
-            }],
-            label: Some("light_bind_group"),
-        });
-
-        const SPACE_BETWEEN: f32 = 3.0;
-        let instances = (0..NUM_INSTANCES_PER_ROW)
-            .flat_map(|z| {
-                (0..NUM_INSTANCES_PER_ROW).map(move |x| {
-                    let x = SPACE_BETWEEN * (x as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
-                    let z = SPACE_BETWEEN * (z as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
-
-                    let position = cgmath::Vector3 { x, y: 0.0, z };
-
-                    let rotation = if position.is_zero() {
-                        cgmath::Quaternion::from_axis_angle(
-                            cgmath::Vector3::unit_z(),
-                            cgmath::Deg(0.0),
-                        )
-                    } else {
-                        cgmath::Quaternion::from_axis_angle(
-                            position.clone().normalize(),
-                            cgmath::Deg(45.0),
-                        )
-                    };
-
-                    Instance { position, rotation }
-                })
-            })
-            .collect::<Vec<_>>();
-
-        let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
-        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Instance Buffer"),
-            contents: bytemuck::cast_slice(&instance_data),
-            usage: wgpu::BufferUsage::VERTEX,
         });
 
         let model_loader = ModelLoader::new(&device);
@@ -372,6 +428,27 @@ impl State {
         let obj_model = model_loader
             .load(&device, &queue, &texture_layout, res_dir.join("cube.obj"))
             .unwrap();
+        let cube_model = model_loader
+            .load(&device, &queue, &texture_layout, res_dir.join("cube.obj"))
+            .unwrap();
+
+        let font_renderer = FontRenderer::new(
+            &device,
+            &swapchain_desc,
+            FONT_DATA,
+            window.scale_factor() as _,
+        )
+        .unwrap();
+
+        let light = Light::new(
+            &device,
+            &light_bind_group_layout,
+            &shadow_bind_group_layout,
+            0.1..100.0,
+            cgmath::Deg(45.0),
+            [3.0, 2.0, 3.0],
+            [1.0, 1.0, 1.0],
+        );
 
         Self {
             surface,
@@ -390,12 +467,11 @@ impl State {
             uniform_buffer,
             uniform_bind_group,
             obj_model,
+            cube_model,
             light_pipeline,
             light,
-            light_buffer,
-            light_bind_group,
-            instances,
-            instance_buffer,
+            font_renderer,
+            shadow_pipeline,
         }
     }
 
@@ -409,7 +485,8 @@ impl State {
         self.projection.resize(new_size.width, new_size.height);
         self.depth_texture = texture::Texture::create_depth_texture(
             &self.device,
-            &self.swapchain_desc,
+            self.swapchain_desc.width,
+            self.swapchain_desc.height,
             "depth_texture",
         );
     }
@@ -449,15 +526,15 @@ impl State {
             bytemuck::cast_slice(&[self.uniforms]),
         );
         let old_position: cgmath::Vector3<_> = self.light.position.into();
-        self.light.position =
+        self.light.set_position(
             (cgmath::Quaternion::from_axis_angle((0.0, 1.0, 0.0).into(), cgmath::Deg(1.0))
                 * old_position)
-                .into();
-        self.queue
-            .write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light]));
+                .into(),
+        );
+        self.light.update_buffer(&self.queue);
     }
 
-    fn render(&mut self) -> Result<(), wgpu::SwapChainError> {
+    fn render(&mut self, window: &Window, frame_time: f64) -> Result<(), wgpu::SwapChainError> {
         let frame = self.swap_chain.get_current_frame()?.output;
 
         let mut encoder = self
@@ -466,6 +543,22 @@ impl State {
                 label: Some("Render Encoder"),
             });
 
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachmentDescriptor {
+                    attachment: &self.light.shadow_map.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: true,
+                    }),
+                    stencil_ops: None,
+                }),
+                label: Some("Shadow Render Pass"),
+            });
+            render_pass.set_pipeline(&self.shadow_pipeline);
+            render_pass.draw_model_shadow(&self.obj_model, &self.light.light_bind_group);
+        }
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
@@ -492,18 +585,39 @@ impl State {
                 label: Some("Render Pass"),
             });
             render_pass.set_pipeline(&self.pipeline);
-            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-            render_pass.draw_model_instanced(
+            render_pass.set_bind_group(3, &self.light.shadow_bind_group, &[]);
+            render_pass.draw_model(
                 &self.obj_model,
                 &self.uniform_bind_group,
-                &self.light_bind_group,
-                0..self.instances.len() as _,
+                &self.light.light_bind_group,
             );
             render_pass.set_pipeline(&self.light_pipeline);
             render_pass.draw_light_model(
-                &self.obj_model,
+                &self.cube_model,
                 &self.uniform_bind_group,
-                &self.light_bind_group,
+                &self.light.light_bind_group,
+            );
+        }
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
+                    attachment: &frame.view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: true,
+                    },
+                }],
+                depth_stencil_attachment: None,
+                label: Some("UI Render Pass"),
+            });
+            render_pass.draw_text_full_paragraph(
+                &mut self.font_renderer,
+                &self.device,
+                &self.queue,
+                &self.swapchain_desc,
+                window.scale_factor() as _,
+                &format!("FPS: {0:.1}", 1.0 / frame_time),
             );
         }
         self.queue.submit(iter::once(encoder.finish()));
@@ -514,6 +628,7 @@ impl State {
 
 fn main() {
     env_logger::init();
+    info!("Starting up...");
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
 
@@ -529,7 +644,7 @@ fn main() {
             g.game
                 .update(std::time::Duration::from_secs_f64(g.fixed_time_step()));
         },
-        |g| match g.game.render() {
+        |g| match g.game.render(&g.window, g.last_frame_time()) {
             Ok(_) => (),
             Err(wgpu::SwapChainError::Lost) => g.game.resize(g.game.size),
             Err(wgpu::SwapChainError::OutOfMemory) => g.exit(),
