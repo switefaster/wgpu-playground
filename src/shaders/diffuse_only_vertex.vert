@@ -10,15 +10,22 @@ layout(location=0) out vec2 v_tex_coords;
 layout(location=1) out vec3 v_position;
 layout(location=2) out vec3 v_view_position;
 layout(location=3) out vec3 v_light_position;
-layout(location=4) out vec4 v_shadow_tex_coord;
+layout(location=4) out vec3 v_normal;
+layout(location=5) out vec4 v_shadow_tex_coord;
 
-layout(set=1, binding=0) 
-uniform Uniforms {
+layout(set=0, binding=0)
+uniform TransformUniform {
+    mat4 model_matrix;
+    mat4 model_inv_transpose;
+};
+
+layout(set=2, binding=0) 
+uniform ViewUniform {
     vec3 u_view_position; 
     mat4 u_view_proj;
 };
 
-layout(set=2, binding=0) 
+layout(set=3, binding=0) 
 uniform Light {
     mat4 u_view_proj_tex;
     mat4 u_light_view_proj;
@@ -28,22 +35,13 @@ uniform Light {
 
 void main() {
     v_tex_coords = a_tex_coords;
-    mat4 model_matrix = mat4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0);
     vec4 model_space = model_matrix * vec4(a_position, 1.0);
-    mat3 normal_matrix = mat3(inverse(transpose(model_matrix)));
-    vec3 normal = normalize(normal_matrix * a_normal);
-    vec3 tangent = normalize(normal_matrix * a_tangent);
-    vec3 bitangent = normalize(normal_matrix * a_bitangent);
-    
-    mat3 tangent_matrix = transpose(mat3(
-        tangent,
-        bitangent,
-        normal
-    ));
+    mat3 normal_matrix = mat3(model_inv_transpose);
+    v_normal = normal_matrix * a_normal;
 
-    v_position = tangent_matrix * model_space.xyz;
-    v_view_position = tangent_matrix * u_view_position;
-    v_light_position = tangent_matrix * light_position;
+    v_position = model_space.xyz;
+    v_view_position = u_view_position;
+    v_light_position =light_position;
     v_shadow_tex_coord = u_view_proj_tex * model_space;
     gl_Position = u_view_proj * model_space;
 }

@@ -1,22 +1,24 @@
-pub trait Bindable {
-    fn layout_entries() -> Vec<wgpu::BindGroupLayoutEntry>;
+pub trait Bindable<F> {
+    fn layout_entries(filter: F) -> Vec<wgpu::BindGroupLayoutEntry>;
     fn bind_group_entries(&self) -> Vec<wgpu::BindGroupEntry>;
 }
 
-pub struct Binder<T: Bindable> {
+pub struct Binder<F, T: Bindable<F>> {
     pub layout: wgpu::BindGroupLayout,
     _marker: std::marker::PhantomData<T>,
+    _marker_1: std::marker::PhantomData<F>,
 }
 
-impl<T: Bindable> Binder<T> {
-    pub fn new(device: &wgpu::Device, label: Option<&str>) -> Self {
+impl<F, T: Bindable<F>> Binder<F, T> {
+    pub fn new(device: &wgpu::Device, filter: F, label: Option<&str>) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label,
-            entries: &T::layout_entries(),
+            entries: &T::layout_entries(filter),
         });
         Self {
             layout,
             _marker: std::marker::PhantomData,
+            _marker_1: std::marker::PhantomData,
         }
     }
 
@@ -82,8 +84,8 @@ pub fn create_render_pipeline(
                 depth_compare: wgpu::CompareFunction::LessEqual,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState {
-                    constant: 2,
-                    slope_scale: 2.0,
+                    constant: 0,
+                    slope_scale: 0.0,
                     clamp: 0.0,
                 },
                 clamp_depth: false,
@@ -120,8 +122,8 @@ pub fn create_render_pipeline(
                 depth_compare: wgpu::CompareFunction::LessEqual,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState {
-                    constant: 0,
-                    slope_scale: 0.0,
+                    constant: 2,
+                    slope_scale: 2.0,
                     clamp: 0.0,
                 },
                 clamp_depth: false,
@@ -136,6 +138,7 @@ pub fn create_render_pipeline(
     }
 }
 
+#[allow(dead_code)]
 pub fn create_transparent_render_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
