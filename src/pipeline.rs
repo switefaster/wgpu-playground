@@ -122,6 +122,83 @@ pub fn create_render_pipeline(
                 depth_compare: wgpu::CompareFunction::LessEqual,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState {
+                    constant: 0,
+                    slope_scale: 0.0,
+                    clamp: 0.0,
+                },
+                clamp_depth: false,
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            fragment: None,
+        })
+    }
+}
+
+pub fn create_shadow_render_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    depth_format: Option<wgpu::TextureFormat>,
+    vertex_desc: &[wgpu::VertexBufferLayout],
+    vs: wgpu::ShaderModuleDescriptor,
+    fs: Option<wgpu::ShaderModuleDescriptor>,
+    label: Option<&str>,
+) -> wgpu::RenderPipeline {
+    let vs_module = device.create_shader_module(&vs);
+
+    if let Some(f) = fs {
+        let fs_module = device.create_shader_module(&f);
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label,
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: &vs_module,
+                entry_point: "main",
+                buffers: vertex_desc,
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: depth_format.map(|format| wgpu::DepthStencilState {
+                format: format,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState {
+                    constant: 2,
+                    slope_scale: 2.0,
+                    clamp: 0.0,
+                },
+                clamp_depth: false,
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &fs_module,
+                entry_point: "main",
+                targets: &[],
+            }),
+        })
+    } else {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label,
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: &vs_module,
+                entry_point: "main",
+                buffers: vertex_desc,
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: depth_format.map(|format| wgpu::DepthStencilState {
+                format: format,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState {
                     constant: 2,
                     slope_scale: 2.0,
                     clamp: 0.0,

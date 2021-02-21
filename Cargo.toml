@@ -20,6 +20,7 @@ wgpu_glyph = "0.11"
 tobj = "2.0.3"
 wgpu = "0.7.0"
 winit = "0.24.0"
+rapier3d = { version = "0.5", features = ["parallel", "simd-nightly"] }
 
 [build-dependencies]
 anyhow = "1.0.38"

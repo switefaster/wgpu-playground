@@ -107,6 +107,30 @@ impl ColorVertex {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct DiffuseVertex {
+    pub position: [f32; 3],
+    pub tex_coord: [f32; 2],
+    pub normal: [f32; 3],
+}
+
+const DIFFUSE_VERTEX_LAYOUT: wgpu::VertexBufferLayout = wgpu::VertexBufferLayout {
+    array_stride: std::mem::size_of::<AlmightVertex>() as wgpu::BufferAddress,
+    step_mode: wgpu::InputStepMode::Vertex,
+    attributes: &wgpu::vertex_attr_array![
+        0 => Float3,
+        1 => Float2,
+        2 => Float3,
+    ],
+};
+
+impl DiffuseVertex {
+    fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
+        DIFFUSE_VERTEX_LAYOUT
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct AlmightVertex {
     pub position: [f32; 3],
     pub tex_coord: [f32; 2],
@@ -163,6 +187,8 @@ struct Light {
     light_bind_group: wgpu::BindGroup,
     shadow_bind_group: wgpu::BindGroup,
     shadow_map: texture::Texture,
+    shadow_map_width: u32,
+    shadow_map_height: u32,
 }
 
 impl Light {
@@ -174,6 +200,7 @@ impl Light {
         fov: F,
         position: [f32; 3],
         color: [f32; 3],
+        (shadow_map_width, shadow_map_height): (u32, u32),
     ) -> Self {
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Light Buffer"),
@@ -218,11 +245,13 @@ impl Light {
             light_bind_group,
             shadow_bind_group,
             shadow_map,
+            shadow_map_width,
+            shadow_map_height,
         }
     }
 
     fn set_position(&mut self, point: [f32; 3]) {
-        self.position = point;
+        self.position = point.into();
     }
 
     fn update_buffer(&self, queue: &wgpu::Queue) {
@@ -337,6 +366,18 @@ pub struct RenderComponent {
 }
 
 impl RenderComponent {
+    pub fn set_position<P: Into<cgmath::Point3<f32>>>(&mut self, point: P) {
+        self.position = point.into();
+    }
+
+    pub fn set_rotation<V: Into<cgmath::Vector3<f32>>, R: Into<cgmath::Rad<f32>>>(
+        &mut self,
+        axis: V,
+        angle: R,
+    ) {
+        self.rotation = cgmath::Quaternion::from_axis_angle(axis.into(), angle);
+    }
+
     fn update_transform(&self, queue: &wgpu::Queue) {
         let model_matrix = cgmath::Matrix4::from_translation(self.position.to_vec())
             * cgmath::Matrix4::from(self.rotation)
@@ -401,17 +442,17 @@ impl RenderComponentBuilder {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct RenderComponentHandle {
     id: u32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct MeshHandle {
     id: u32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct MaterialHandle {
     id: u32,
 }
@@ -448,7 +489,9 @@ pub struct Scene {
     solid_color_pipeline: wgpu::RenderPipeline,
     diffuse_only_pipeline: wgpu::RenderPipeline,
     almight_pipeline: wgpu::RenderPipeline,
-    shadow_pipeline: wgpu::RenderPipeline,
+    solid_shadow_pipeline: wgpu::RenderPipeline,
+    diffuse_shadow_pipeline: wgpu::RenderPipeline,
+    almight_shadow_pipeline: wgpu::RenderPipeline,
     solid_item_layout: wgpu::BindGroupLayout,
     diffuse_item_layout: wgpu::BindGroupLayout,
     almight_item_layout: wgpu::BindGroupLayout,
@@ -637,7 +680,7 @@ impl Scene {
             swapchain_desc.height,
             cgmath::Deg(45.0),
             0.1,
-            100.0,
+            1000.0,
         );
 
         let solid_color_pipeline = {
@@ -682,7 +725,7 @@ impl Scene {
                 &device,
                 &layout,
                 Some(texture::Texture::DEPTH_FORMAT),
-                &[AlmightVertex::desc()],
+                &[DiffuseVertex::desc()],
                 wgpu::include_spirv!("shaders/diffuse_only_vertex.vert.spv"),
                 Some((
                     swapchain_desc.format,
@@ -718,20 +761,66 @@ impl Scene {
             )
         };
 
-        let shadow_pipeline = {
+        let solid_shadow_pipeline = {
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Shadow Mapping Pipeline Layout"),
-                bind_group_layouts: &[&light_bind_group_layout],
+                bind_group_layouts: &[&light_bind_group_layout, &transform_bind_group_layout],
                 push_constant_ranges: &[],
             });
-            pipeline::create_render_pipeline(
+            pipeline::create_shadow_render_pipeline(
+                &device,
+                &layout,
+                Some(texture::Texture::DEPTH_FORMAT),
+                &[ColorVertex::desc()],
+                wgpu::include_spirv!("shaders/color_shadow.vert.spv"),
+                Some(wgpu::include_spirv!("shaders/color_shadow.frag.spv")),
+                Some("Solid Shadow Mapping Pipeline"),
+            )
+        };
+
+        let diffuse_shadow_pipeline = {
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Shadow Mapping Pipeline Layout"),
+                bind_group_layouts: &[
+                    &light_bind_group_layout,
+                    &transform_bind_group_layout,
+                    &diffuse_item_layout,
+                ],
+                push_constant_ranges: &[],
+            });
+            pipeline::create_shadow_render_pipeline(
                 &device,
                 &layout,
                 Some(texture::Texture::DEPTH_FORMAT),
                 &[AlmightVertex::desc()],
-                wgpu::include_spirv!("shaders/shadow.vert.spv"),
-                None,
-                Some("Shadow Mapping Pipeline"),
+                wgpu::include_spirv!("shaders/almight_diffuse_shadow.vert.spv"),
+                Some(wgpu::include_spirv!(
+                    "shaders/almight_diffuse_shadow.frag.spv"
+                )),
+                Some("Diffuse Shadow Mapping Pipeline"),
+            )
+        };
+
+        let almight_shadow_pipeline = {
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Shadow Mapping Pipeline Layout"),
+                bind_group_layouts: &[
+                    &light_bind_group_layout,
+                    &transform_bind_group_layout,
+                    &almight_item_layout,
+                ],
+                push_constant_ranges: &[],
+            });
+            pipeline::create_shadow_render_pipeline(
+                &device,
+                &layout,
+                Some(texture::Texture::DEPTH_FORMAT),
+                &[AlmightVertex::desc()],
+                wgpu::include_spirv!("shaders/almight_diffuse_shadow.vert.spv"),
+                Some(wgpu::include_spirv!(
+                    "shaders/almight_diffuse_shadow.frag.spv"
+                )),
+                Some("Almight Shadow Mapping Pipeline"),
             )
         };
 
@@ -759,8 +848,9 @@ impl Scene {
             &shadow_bind_group_layout,
             0.1..100.0,
             cgmath::Deg(60.0),
-            [3.0, 2.0, 3.0],
+            [9.0, 6.0, 9.0],
             [1.0, 1.0, 1.0],
+            (1024, 1024),
         );
 
         Self {
@@ -779,7 +869,9 @@ impl Scene {
             solid_color_pipeline,
             diffuse_only_pipeline,
             almight_pipeline,
-            shadow_pipeline,
+            solid_shadow_pipeline,
+            diffuse_shadow_pipeline,
+            almight_shadow_pipeline,
             solid_item_layout,
             diffuse_item_layout,
             almight_item_layout,
@@ -1049,11 +1141,25 @@ impl Scene {
                     stencil_ops: None,
                 }),
             });
-            render_pass.set_pipeline(&self.shadow_pipeline);
             render_pass.set_bind_group(0, &self.light.light_bind_group, &[]);
             for (_, component) in &self.render_queue {
                 if let LitType::Shadow = component.lit_type {
                     for item in &component.items {
+                        render_pass.set_bind_group(1, &item.bind_group, &[]);
+                        let material = &self.material_registry[item.material_id as usize];
+                        match &self.material_registry[item.material_id as usize].render_type {
+                            RenderType::Color => {
+                                render_pass.set_pipeline(&self.solid_shadow_pipeline);
+                            }
+                            RenderType::DiffuseTexture { .. } => {
+                                render_pass.set_pipeline(&self.diffuse_shadow_pipeline);
+                                render_pass.set_bind_group(2, &material.bind_group, &[]);
+                            }
+                            RenderType::DiffuseNormalTexture { .. } => {
+                                render_pass.set_pipeline(&self.almight_shadow_pipeline);
+                                render_pass.set_bind_group(2, &material.bind_group, &[]);
+                            }
+                        }
                         let mesh = &self.mesh_registry[item.mesh_id as usize];
                         render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                         render_pass.set_index_buffer(
