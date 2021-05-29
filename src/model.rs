@@ -78,35 +78,35 @@ pub mod obj {
             vec![
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Buffer {
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: &self.src_vertex_buffer,
                         offset: 0,
                         size: None,
-                    },
+                    }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Buffer {
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: &self.dst_vertex_buffer,
                         offset: 0,
                         size: None,
-                    },
+                    }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::Buffer {
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: &self.index_buffer,
                         offset: 0,
                         size: None,
-                    },
+                    }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::Buffer {
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: &self.info_buffer,
                         offset: 0,
                         size: None,
-                    },
+                    }),
                 },
             ]
         }
@@ -136,11 +136,20 @@ pub mod obj {
             scene: &mut render::Scene,
             path: P,
         ) -> Result<RenderComponentBuilder> {
-            let (obj_models, obj_materials) = tobj::load_obj(path.as_ref(), true)?;
+            let (obj_models, obj_materials) = tobj::load_obj(
+                path.as_ref(),
+                &tobj::LoadOptions {
+                    single_index: true,
+                    triangulate: true,
+                    ignore_points: true,
+                    ignore_lines: true,
+                },
+            )?;
 
             let containing_folder = path.as_ref().parent().context("Directory has no parent")?;
 
             let materials = obj_materials
+                .unwrap()
                 .par_iter()
                 .map(|mat| {
                     let mut textures = [

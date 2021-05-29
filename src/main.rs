@@ -1,18 +1,22 @@
-// #![windows_subsystem = "windows"]
+//#![windows_subsystem = "windows"]
 
 use std::iter;
 
 use futures::{executor::block_on, task::SpawnExt};
 use log::info;
 use model::obj::ModelLoader;
+use specs::WorldExt;
+use std::time::Instant;
 use wgpu::util::DeviceExt;
 use winit::{
     event::{DeviceEvent, ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
-    event_loop::EventLoop,
+    event_loop::{ControlFlow, EventLoop},
     window::{Window, WindowBuilder},
 };
 
 mod camera;
+mod command;
+mod gui;
 mod model;
 mod pipeline;
 mod render;
@@ -27,18 +31,20 @@ struct PhysicsState {
     bodies: rapier3d::dynamics::RigidBodySet,
     colliders: rapier3d::geometry::ColliderSet,
     joints: rapier3d::dynamics::JointSet,
+    ccd_solver: rapier3d::dynamics::CCDSolver,
 }
 
 impl PhysicsState {
     pub fn new() -> Self {
         let pipeline = rapier3d::pipeline::PhysicsPipeline::new();
-        let gravity = rapier3d::na::Vector3::new(0.0, -9.81, 0.0);
+        let gravity = rapier3d::na::Vector3::new(0.0, -9.8, 0.0);
         let integration_parameter = rapier3d::dynamics::IntegrationParameters::default();
         let broad_phase = rapier3d::geometry::BroadPhase::new();
         let narrow_phase = rapier3d::geometry::NarrowPhase::new();
         let bodies = rapier3d::dynamics::RigidBodySet::new();
         let colliders = rapier3d::geometry::ColliderSet::new();
         let joints = rapier3d::dynamics::JointSet::new();
+        let ccd_solver = rapier3d::dynamics::CCDSolver::new();
 
         Self {
             pipeline,
@@ -49,6 +55,7 @@ impl PhysicsState {
             bodies,
             colliders,
             joints,
+            ccd_solver,
         }
     }
 }
@@ -106,7 +113,7 @@ impl State {
 
         let swapchain_desc = wgpu::SwapChainDescriptor {
             usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
-            format: adapter.get_swap_chain_preferred_format(&surface),
+            format: adapter.get_swap_chain_preferred_format(&surface).unwrap(),
             width: size.width,
             height: size.height,
             present_mode: wgpu::PresentMode::Immediate,
@@ -144,29 +151,21 @@ impl State {
                 position: [-1.0, 0.0, -1.0],
                 color: [1.0, 1.0, 1.0, 1.0],
                 normal: [0.0, 1.0, 0.0],
-                tangent: [0.0, 0.0, 0.0],
-                bitangent: [0.0, 0.0, 0.0],
             },
             render::ColorVertex {
                 position: [1.0, 0.0, -1.0],
                 color: [1.0, 1.0, 1.0, 1.0],
                 normal: [0.0, 1.0, 0.0],
-                tangent: [0.0, 0.0, 0.0],
-                bitangent: [0.0, 0.0, 0.0],
             },
             render::ColorVertex {
                 position: [1.0, 0.0, 1.0],
                 color: [1.0, 1.0, 1.0, 1.0],
                 normal: [0.0, 1.0, 0.0],
-                tangent: [0.0, 0.0, 0.0],
-                bitangent: [0.0, 0.0, 0.0],
             },
             render::ColorVertex {
                 position: [-1.0, 0.0, 1.0],
                 color: [1.0, 1.0, 1.0, 1.0],
                 normal: [0.0, 1.0, 0.0],
-                tangent: [0.0, 0.0, 0.0],
-                bitangent: [0.0, 0.0, 0.0],
             },
         ];
 
@@ -300,6 +299,17 @@ impl State {
                             true,
                         );
                     }
+                    VirtualKeyCode::R => {
+                        let box_body = self.physics.bodies.get_mut(self.box_handle).unwrap();
+                        box_body.set_position(
+                            rapier3d::na::Isometry3::new(
+                                rapier3d::na::Vector3::new(0.0, 2.0, 0.0),
+                                rapier3d::na::Vector3::y(),
+                            ),
+                            true,
+                        );
+                    }
+                    VirtualKeyCode::S => {}
                     _ => {}
                 }
                 self.camera_controller.process_keyboard(*key, *state)
@@ -324,6 +334,7 @@ impl State {
 
     fn update(&mut self, _dt: std::time::Duration) {
         self.scene.update_light_pos();
+        let physics_hooks = ();
         let event_handle = ();
         self.physics.pipeline.step(
             &self.physics.gravity,
@@ -333,8 +344,8 @@ impl State {
             &mut self.physics.bodies,
             &mut self.physics.colliders,
             &mut self.physics.joints,
-            None,
-            None,
+            &mut self.physics.ccd_solver,
+            &physics_hooks,
             &event_handle,
         );
         let box_body = self.physics.bodies.get(self.box_handle).unwrap();
@@ -415,53 +426,52 @@ fn main() {
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
 
-    let state = block_on(State::new(&window));
+    let mut state = block_on(State::new(&window));
 
-    game_loop::game_loop(
-        event_loop,
-        window,
-        state,
-        60,
-        0.016,
-        |g| {
-            g.game
-                .update(std::time::Duration::from_secs_f64(g.fixed_time_step()));
-        },
-        |g| match g
-            .game
-            .render(std::time::Duration::from_secs_f64(g.last_frame_time()))
-        {
-            Ok(_) => (),
-            Err(wgpu::SwapChainError::Lost) => g.game.resize(g.game.size),
-            Err(wgpu::SwapChainError::OutOfMemory) => g.exit(),
-            Err(e) => eprintln!("{:?}", e),
-        },
-        |g, event| match event {
-            Event::DeviceEvent { ref event, .. } => {
-                g.game.input(event);
-            }
-            Event::WindowEvent {
-                window_id,
-                ref event,
-            } if window_id == g.window.id() => match event {
-                WindowEvent::CloseRequested => g.exit(),
-                WindowEvent::KeyboardInput { input, .. } => match input {
-                    KeyboardInput {
-                        state: ElementState::Pressed,
-                        virtual_keycode: Some(VirtualKeyCode::Escape),
-                        ..
-                    } => g.exit(),
-                    _ => {}
-                },
-                WindowEvent::Resized(physical_size) => {
-                    g.game.resize(*physical_size);
-                }
-                WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                    g.game.resize(**new_inner_size);
-                }
+    let mut world = specs::World::new();
+    let mut dispatcher = specs::DispatcherBuilder::new().build();
+
+    let mut now = Instant::now();
+
+    event_loop.run(move |event, _, control_flow| match event {
+        Event::DeviceEvent { ref event, .. } => {
+            state.input(event);
+        }
+        Event::WindowEvent {
+            ref event,
+            window_id,
+        } if window_id == window.id() => match event {
+            WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
+            WindowEvent::KeyboardInput { input, .. } => match input {
+                KeyboardInput {
+                    state: ElementState::Pressed,
+                    virtual_keycode: Some(VirtualKeyCode::Escape),
+                    ..
+                } => *control_flow = ControlFlow::Exit,
                 _ => {}
             },
+            WindowEvent::Resized(physical_size) => {
+                state.resize(*physical_size);
+            }
+            WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
+                state.resize(**new_inner_size);
+            }
             _ => {}
         },
-    );
+        Event::RedrawRequested(_) => {
+            let dt = now.elapsed();
+            now = Instant::now();
+            state.update(dt);
+            match state.render(dt) {
+                Ok(_) => {}
+                Err(wgpu::SwapChainError::Lost) => state.resize(state.size),
+                Err(wgpu::SwapChainError::OutOfMemory) => *control_flow = ControlFlow::Exit,
+                Err(e) => eprintln!("{:?}", e),
+            }
+        }
+        Event::MainEventsCleared => {
+            window.request_redraw();
+        }
+        _ => {}
+    });
 }

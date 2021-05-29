@@ -74,7 +74,7 @@ pub fn create_render_pipeline(
             layout: Some(layout),
             vertex: wgpu::VertexState {
                 module: &vs_module,
-                entry_point: "main",
+                entry_point: "vs_main",
                 buffers: vertex_desc,
             },
             primitive: wgpu::PrimitiveState::default(),
@@ -88,7 +88,6 @@ pub fn create_render_pipeline(
                     slope_scale: 0.0,
                     clamp: 0.0,
                 },
-                clamp_depth: false,
             }),
             multisample: wgpu::MultisampleState {
                 count: 1,
@@ -97,11 +96,10 @@ pub fn create_render_pipeline(
             },
             fragment: Some(wgpu::FragmentState {
                 module: &fs_module,
-                entry_point: "main",
+                entry_point: "fs_main",
                 targets: &[wgpu::ColorTargetState {
                     format: color_format,
-                    alpha_blend: wgpu::BlendState::REPLACE,
-                    color_blend: wgpu::BlendState::REPLACE,
+                    blend: None,
                     write_mask: wgpu::ColorWrite::ALL,
                 }],
             }),
@@ -112,7 +110,7 @@ pub fn create_render_pipeline(
             layout: Some(layout),
             vertex: wgpu::VertexState {
                 module: &vs_module,
-                entry_point: "main",
+                entry_point: "vs_main",
                 buffers: vertex_desc,
             },
             primitive: wgpu::PrimitiveState::default(),
@@ -126,7 +124,6 @@ pub fn create_render_pipeline(
                     slope_scale: 0.0,
                     clamp: 0.0,
                 },
-                clamp_depth: false,
             }),
             multisample: wgpu::MultisampleState {
                 count: 1,
@@ -156,7 +153,7 @@ pub fn create_shadow_render_pipeline(
             layout: Some(layout),
             vertex: wgpu::VertexState {
                 module: &vs_module,
-                entry_point: "main",
+                entry_point: "vs_main",
                 buffers: vertex_desc,
             },
             primitive: wgpu::PrimitiveState::default(),
@@ -170,7 +167,6 @@ pub fn create_shadow_render_pipeline(
                     slope_scale: 2.0,
                     clamp: 0.0,
                 },
-                clamp_depth: false,
             }),
             multisample: wgpu::MultisampleState {
                 count: 1,
@@ -179,7 +175,7 @@ pub fn create_shadow_render_pipeline(
             },
             fragment: Some(wgpu::FragmentState {
                 module: &fs_module,
-                entry_point: "main",
+                entry_point: "fs_main",
                 targets: &[],
             }),
         })
@@ -189,7 +185,7 @@ pub fn create_shadow_render_pipeline(
             layout: Some(layout),
             vertex: wgpu::VertexState {
                 module: &vs_module,
-                entry_point: "main",
+                entry_point: "vs_main",
                 buffers: vertex_desc,
             },
             primitive: wgpu::PrimitiveState::default(),
@@ -203,7 +199,6 @@ pub fn create_shadow_render_pipeline(
                     slope_scale: 2.0,
                     clamp: 0.0,
                 },
-                clamp_depth: false,
             }),
             multisample: wgpu::MultisampleState {
                 count: 1,
@@ -234,7 +229,7 @@ pub fn create_transparent_render_pipeline(
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: &vs_module,
-            entry_point: "main",
+            entry_point: "vs_main",
             buffers: vertex_desc,
         },
         primitive: wgpu::PrimitiveState::default(),
@@ -248,7 +243,6 @@ pub fn create_transparent_render_pipeline(
                 slope_scale: 0.0,
                 clamp: 0.0,
             },
-            clamp_depth: false,
         }),
         multisample: wgpu::MultisampleState {
             count: 1,
@@ -257,19 +251,21 @@ pub fn create_transparent_render_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &fs_module,
-            entry_point: "main",
+            entry_point: "fs_main",
             targets: &[wgpu::ColorTargetState {
                 format: color_format,
-                alpha_blend: wgpu::BlendState {
-                    src_factor: wgpu::BlendFactor::One,
-                    dst_factor: wgpu::BlendFactor::Zero,
-                    operation: wgpu::BlendOperation::Add,
-                },
-                color_blend: wgpu::BlendState {
-                    src_factor: wgpu::BlendFactor::SrcAlpha,
-                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                    operation: wgpu::BlendOperation::Add,
-                },
+                blend: Some(wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::SrcAlpha,
+                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::One,
+                        dst_factor: wgpu::BlendFactor::Zero,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                }),
                 write_mask: wgpu::ColorWrite::ALL,
             }],
         }),

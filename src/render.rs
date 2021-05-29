@@ -1,6 +1,6 @@
 use cgmath::{EuclideanSpace, Matrix, Rotation3, SquareMatrix};
 use log::debug;
-use std::{collections::HashMap, ops::Range};
+use std::{borrow::Cow, collections::HashMap, ops::Range};
 use wgpu::util::DeviceExt;
 
 use crate::{camera, pipeline, texture};
@@ -83,19 +83,15 @@ pub struct ColorVertex {
     pub position: [f32; 3],
     pub color: [f32; 4],
     pub normal: [f32; 3],
-    pub tangent: [f32; 3],
-    pub bitangent: [f32; 3],
 }
 
 const COLOR_VERTEX_LAYOUT: wgpu::VertexBufferLayout = wgpu::VertexBufferLayout {
     array_stride: std::mem::size_of::<ColorVertex>() as wgpu::BufferAddress,
     step_mode: wgpu::InputStepMode::Vertex,
     attributes: &wgpu::vertex_attr_array![
-        0 => Float3,
-        1 => Float4,
-        2 => Float3,
-        3 => Float3,
-        4 => Float3,
+        0 => Float32x3,
+        1 => Float32x4,
+        2 => Float32x3,
     ],
 };
 
@@ -117,9 +113,9 @@ const DIFFUSE_VERTEX_LAYOUT: wgpu::VertexBufferLayout = wgpu::VertexBufferLayout
     array_stride: std::mem::size_of::<AlmightVertex>() as wgpu::BufferAddress,
     step_mode: wgpu::InputStepMode::Vertex,
     attributes: &wgpu::vertex_attr_array![
-        0 => Float3,
-        1 => Float2,
-        2 => Float3,
+        0 => Float32x3,
+        1 => Float32x2,
+        2 => Float32x3,
     ],
 };
 
@@ -143,11 +139,11 @@ const ALMIGHT_VERTEX_LAYOUT: wgpu::VertexBufferLayout = wgpu::VertexBufferLayout
     array_stride: std::mem::size_of::<AlmightVertex>() as wgpu::BufferAddress,
     step_mode: wgpu::InputStepMode::Vertex,
     attributes: &wgpu::vertex_attr_array![
-        0 => Float3,
-        1 => Float2,
-        2 => Float3,
-        3 => Float3,
-        4 => Float3,
+        0 => Float32x3,
+        1 => Float32x2,
+        2 => Float32x3,
+        3 => Float32x3,
+        4 => Float32x3,
     ],
 };
 
@@ -656,7 +652,7 @@ impl Scene {
                         visibility: wgpu::ShaderStage::FRAGMENT,
                         ty: wgpu::BindingType::Texture {
                             multisampled: false,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            sample_type: wgpu::TextureSampleType::Depth,
                             view_dimension: wgpu::TextureViewDimension::D2,
                         },
                         count: None,
@@ -700,10 +696,22 @@ impl Scene {
                 &layout,
                 Some(texture::Texture::DEPTH_FORMAT),
                 &[ColorVertex::desc()],
-                wgpu::include_spirv!("shaders/solid_vertex.vert.spv"),
+                wgpu::ShaderModuleDescriptor {
+                    label: Some("Solid Color Vertex"),
+                    source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
+                        "shaders/solid_color.wgsl"
+                    ))),
+                    flags: wgpu::ShaderFlags::VALIDATION,
+                },
                 Some((
                     swapchain_desc.format,
-                    wgpu::include_spirv!("shaders/solid_frag.frag.spv"),
+                    wgpu::ShaderModuleDescriptor {
+                        label: Some("Solid Color Fragment"),
+                        source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
+                            "shaders/solid_color.wgsl"
+                        ))),
+                        flags: wgpu::ShaderFlags::VALIDATION,
+                    },
                 )),
                 Some("Solid Color Render Pipeline"),
             )
@@ -726,10 +734,22 @@ impl Scene {
                 &layout,
                 Some(texture::Texture::DEPTH_FORMAT),
                 &[DiffuseVertex::desc()],
-                wgpu::include_spirv!("shaders/diffuse_only_vertex.vert.spv"),
+                wgpu::ShaderModuleDescriptor {
+                    label: Some("Diffuse Only Vertex"),
+                    source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
+                        "shaders/diffuse_only.wgsl"
+                    ))),
+                    flags: wgpu::ShaderFlags::VALIDATION,
+                },
                 Some((
                     swapchain_desc.format,
-                    wgpu::include_spirv!("shaders/diffuse_only_frag.frag.spv"),
+                    wgpu::ShaderModuleDescriptor {
+                        label: Some("Diffuse Only Fragment"),
+                        source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
+                            "shaders/diffuse_only.wgsl"
+                        ))),
+                        flags: wgpu::ShaderFlags::VALIDATION,
+                    },
                 )),
                 Some("Diffuse Only Render Pipeline"),
             )
@@ -752,10 +772,22 @@ impl Scene {
                 &layout,
                 Some(texture::Texture::DEPTH_FORMAT),
                 &[AlmightVertex::desc()],
-                wgpu::include_spirv!("shaders/almight_vertex.vert.spv"),
+                wgpu::ShaderModuleDescriptor {
+                    label: Some("Almight Vertex"),
+                    source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
+                        "shaders/almight.wgsl"
+                    ))),
+                    flags: wgpu::ShaderFlags::VALIDATION,
+                },
                 Some((
                     swapchain_desc.format,
-                    wgpu::include_spirv!("shaders/almight_frag.frag.spv"),
+                    wgpu::ShaderModuleDescriptor {
+                        label: Some("Almight Fragment"),
+                        source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
+                            "shaders/almight.wgsl"
+                        ))),
+                        flags: wgpu::ShaderFlags::VALIDATION,
+                    },
                 )),
                 Some("Almight Render Pipeline"),
             )
@@ -772,8 +804,20 @@ impl Scene {
                 &layout,
                 Some(texture::Texture::DEPTH_FORMAT),
                 &[ColorVertex::desc()],
-                wgpu::include_spirv!("shaders/color_shadow.vert.spv"),
-                Some(wgpu::include_spirv!("shaders/color_shadow.frag.spv")),
+                wgpu::ShaderModuleDescriptor {
+                    label: Some("Color Shadow Mapping Vertex"),
+                    source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
+                        "shaders/color_shadow.wgsl"
+                    ))),
+                    flags: wgpu::ShaderFlags::VALIDATION,
+                },
+                Some(wgpu::ShaderModuleDescriptor {
+                    label: Some("Color Shadow Mapping Fragment"),
+                    source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
+                        "shaders/color_shadow.wgsl"
+                    ))),
+                    flags: wgpu::ShaderFlags::VALIDATION,
+                }),
                 Some("Solid Shadow Mapping Pipeline"),
             )
         };
@@ -793,10 +837,20 @@ impl Scene {
                 &layout,
                 Some(texture::Texture::DEPTH_FORMAT),
                 &[AlmightVertex::desc()],
-                wgpu::include_spirv!("shaders/almight_diffuse_shadow.vert.spv"),
-                Some(wgpu::include_spirv!(
-                    "shaders/almight_diffuse_shadow.frag.spv"
-                )),
+                wgpu::ShaderModuleDescriptor {
+                    label: Some("Diffuse Shadow Mapping Vertex"),
+                    source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
+                        "shaders/almight_diffuse_shadow.wgsl"
+                    ))),
+                    flags: wgpu::ShaderFlags::VALIDATION,
+                },
+                Some(wgpu::ShaderModuleDescriptor {
+                    label: Some("Diffuse Shadow Mapping Fragment"),
+                    source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
+                        "shaders/almight_diffuse_shadow.wgsl"
+                    ))),
+                    flags: wgpu::ShaderFlags::VALIDATION,
+                }),
                 Some("Diffuse Shadow Mapping Pipeline"),
             )
         };
@@ -816,10 +870,20 @@ impl Scene {
                 &layout,
                 Some(texture::Texture::DEPTH_FORMAT),
                 &[AlmightVertex::desc()],
-                wgpu::include_spirv!("shaders/almight_diffuse_shadow.vert.spv"),
-                Some(wgpu::include_spirv!(
-                    "shaders/almight_diffuse_shadow.frag.spv"
-                )),
+                wgpu::ShaderModuleDescriptor {
+                    label: Some("Almight Shadow Mapping Vertex"),
+                    source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
+                        "shaders/almight_diffuse_shadow.wgsl"
+                    ))),
+                    flags: wgpu::ShaderFlags::VALIDATION,
+                },
+                Some(wgpu::ShaderModuleDescriptor {
+                    label: Some("Almight Shadow Mapping Fragment"),
+                    source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
+                        "shaders/almight_diffuse_shadow.wgsl"
+                    ))),
+                    flags: wgpu::ShaderFlags::VALIDATION,
+                }),
                 Some("Almight Shadow Mapping Pipeline"),
             )
         };
@@ -924,11 +988,11 @@ impl Scene {
                     layout: &self.transform_layout,
                     entries: &[wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::Buffer {
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                             buffer: &transform_buffer,
                             offset: 0,
                             size: None,
-                        },
+                        }),
                     }],
                 });
 
@@ -1132,8 +1196,8 @@ impl Scene {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shadow Pass"),
                 color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachmentDescriptor {
-                    attachment: &self.light.shadow_map.view,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.light.shadow_map.view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: true,
@@ -1174,8 +1238,8 @@ impl Scene {
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Forward Pass"),
-                color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-                    attachment: color_target,
+                color_attachments: &[wgpu::RenderPassColorAttachment {
+                    view: color_target,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -1187,8 +1251,8 @@ impl Scene {
                         store: true,
                     },
                 }],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachmentDescriptor {
-                    attachment: depth_target,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth_target,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: true,
